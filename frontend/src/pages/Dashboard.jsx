@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { motion } from 'framer-motion';
+import { motion, AnimatePresence } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../store/store';
 import { patientAPI, healthAPI } from '../services/api';
@@ -18,6 +18,110 @@ const StatCard = ({ title, value, sub, color, icon }) => (
   </motion.div>
 );
 
+// ─── SOS Alert Modal ───────────────────────────────────────────────────────────
+function SOSModal({ onConfirm, onCancel, sending }) {
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm px-4"
+    >
+      <motion.div
+        initial={{ scale: 0.8, opacity: 0 }}
+        animate={{ scale: 1, opacity: 1 }}
+        exit={{ scale: 0.8, opacity: 0 }}
+        transition={{ type: 'spring', duration: 0.4 }}
+        className="bg-white rounded-3xl shadow-2xl p-8 max-w-md w-full relative overflow-hidden"
+      >
+        {/* Red glow top */}
+        <div className="absolute -top-10 -right-10 w-40 h-40 rounded-full bg-red-500/20 blur-2xl pointer-events-none" />
+
+        <div className="flex flex-col items-center text-center">
+          {/* Pulsing SOS icon */}
+          <div className="relative mb-5">
+            <div className="w-20 h-20 rounded-full bg-red-100 flex items-center justify-center">
+              <span className="text-4xl">🆘</span>
+            </div>
+            <span className="absolute inset-0 rounded-full border-4 border-red-400 animate-ping opacity-40" />
+          </div>
+
+          <h2 className="text-2xl font-bold text-slate-800 mb-2">Send Emergency Alert?</h2>
+          <p className="text-slate-500 text-sm leading-relaxed mb-1">
+            This will immediately send an SMS to
+          </p>
+          <p className="text-red-600 font-bold text-lg mb-3">+91 9330736637</p>
+          <p className="text-slate-500 text-sm mb-6">
+            The message will include your <strong>name</strong>, <strong>current GPS location</strong>, and a <strong>Google Maps link</strong>.
+          </p>
+
+          <div className="flex gap-3 w-full">
+            <button
+              onClick={onCancel}
+              disabled={sending}
+              className="flex-1 px-5 py-3 rounded-xl border border-slate-200 text-slate-600 font-semibold hover:bg-slate-50 transition-all disabled:opacity-50"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={onConfirm}
+              disabled={sending}
+              className="flex-1 px-5 py-3 rounded-xl bg-red-600 hover:bg-red-700 text-white font-bold transition-all disabled:opacity-70 flex items-center justify-center gap-2"
+            >
+              {sending ? (
+                <>
+                  <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                  Sending…
+                </>
+              ) : (
+                <>🚨 Send Alert</>
+              )}
+            </button>
+          </div>
+        </div>
+      </motion.div>
+    </motion.div>
+  );
+}
+
+// ─── SOS Result Banner ─────────────────────────────────────────────────────────
+function SOSResult({ result, onClose }) {
+  const success = result?.sms_sent;
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: -20 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, y: -20 }}
+      className={`rounded-2xl p-5 flex items-start gap-4 border ${
+        success
+          ? 'bg-green-50 border-green-200'
+          : 'bg-amber-50 border-amber-200'
+      }`}
+    >
+      <span className="text-2xl flex-shrink-0">{success ? '✅' : '⚠️'}</span>
+      <div className="flex-1">
+        <p className={`font-bold text-sm mb-1 ${success ? 'text-green-700' : 'text-amber-700'}`}>
+          {success ? 'SOS Alert Sent Successfully!' : 'Alert Logged — SMS Delivery Issue'}
+        </p>
+        <p className={`text-xs leading-relaxed ${success ? 'text-green-600' : 'text-amber-600'}`}>
+          {result?.message}
+        </p>
+        {result?.maps_link && (
+          <a
+            href={result.maps_link}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1 text-xs text-blue-600 hover:underline mt-2"
+          >
+            📍 View your shared location
+          </a>
+        )}
+      </div>
+      <button onClick={onClose} className="text-slate-400 hover:text-slate-600 ml-2 text-lg leading-none">✕</button>
+    </motion.div>
+  );
+}
+
 export default function Dashboard() {
   const navigate = useNavigate();
   const { user } = useAuthStore();
@@ -26,6 +130,11 @@ export default function Dashboard() {
   const [notifications, setNotifications] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+
+  // SOS state
+  const [showSOSModal, setShowSOSModal] = useState(false);
+  const [sosSending, setSosSending] = useState(false);
+  const [sosResult, setSosResult] = useState(null);
 
   const patientId = user?.id || user?._id || user?.user_id;
 
@@ -52,6 +161,58 @@ export default function Dashboard() {
 
   useEffect(() => { loadData(); }, [loadData]);
 
+  // ─── SOS Handlers ────────────────────────────────────────────────────────────
+  const handleSOSClick = () => {
+    setSosResult(null);
+    setShowSOSModal(true);
+  };
+
+  const handleSOSConfirm = () => {
+    setSosSending(true);
+
+    const sendAlert = async (lat, lng, locationName) => {
+      try {
+        const payload = {
+          latitude: lat ?? null,
+          longitude: lng ?? null,
+          location_name: locationName || null,
+          message: null,
+        };
+        const res = await healthAPI.sendSOSAlert(payload);
+        setSosResult(res.data);
+      } catch (err) {
+        setSosResult({
+          sms_sent: false,
+          message: err?.response?.data?.detail || 'Failed to send alert. Please call emergency services directly.',
+        });
+      } finally {
+        setSosSending(false);
+        setShowSOSModal(false);
+      }
+    };
+
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          const { latitude, longitude } = pos.coords;
+          sendAlert(latitude, longitude, null);
+        },
+        (geoErr) => {
+          console.warn('Geolocation denied or failed:', geoErr.message);
+          sendAlert(null, null, 'Location unavailable');
+        },
+        { timeout: 10000, enableHighAccuracy: true }
+      );
+    } else {
+      sendAlert(null, null, 'Geolocation not supported');
+    }
+  };
+
+  const handleSOSCancel = () => {
+    if (!sosSending) setShowSOSModal(false);
+  };
+
+  // ─── Render ──────────────────────────────────────────────────────────────────
   const profile = dashData?.profile || user || {};
   const stats = dashData?.stats || {};
   const recentReports = dashData?.recent_reports || [];
@@ -77,6 +238,17 @@ export default function Dashboard() {
 
   return (
     <div className="min-h-screen bg-slate-50">
+      {/* ── SOS Modal (portal-like, rendered via AnimatePresence) ── */}
+      <AnimatePresence>
+        {showSOSModal && (
+          <SOSModal
+            onConfirm={handleSOSConfirm}
+            onCancel={handleSOSCancel}
+            sending={sosSending}
+          />
+        )}
+      </AnimatePresence>
+
       {/* Header */}
       <div className="page-header">
         <div className="max-w-7xl mx-auto relative z-10">
@@ -90,18 +262,72 @@ export default function Dashboard() {
                 {profile.email} &nbsp;·&nbsp; {new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
               </p>
             </div>
-            <button onClick={loadData} className="self-start sm:self-auto flex items-center gap-2 px-4 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-white text-sm font-semibold transition-all">
-              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-              </svg>
-              Refresh
-            </button>
+            <div className="flex items-center gap-3 self-start sm:self-auto">
+              {/* 🚨 SOS Alert Button */}
+              <motion.button
+                whileHover={{ scale: 1.05 }}
+                whileTap={{ scale: 0.95 }}
+                onClick={handleSOSClick}
+                className="relative flex items-center gap-2 px-5 py-2.5 rounded-xl bg-red-500 hover:bg-red-600 text-white text-sm font-bold transition-all shadow-lg shadow-red-500/40"
+                title="Send SOS Emergency Alert"
+              >
+                {/* Pulse ring */}
+                <span className="absolute inset-0 rounded-xl border-2 border-red-300 animate-ping opacity-40 pointer-events-none" />
+                <span className="text-base">🆘</span>
+                SOS Alert
+              </motion.button>
+
+              {/* Refresh */}
+              <button onClick={loadData} className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-white/10 hover:bg-white/20 text-white text-sm font-semibold transition-all">
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
+                Refresh
+              </button>
+            </div>
           </div>
         </div>
       </div>
 
       <div className="max-w-7xl mx-auto px-4 py-8 space-y-8">
         {error && <div className="alert-error">{error}</div>}
+
+        {/* SOS Result Banner */}
+        <AnimatePresence>
+          {sosResult && (
+            <SOSResult result={sosResult} onClose={() => setSosResult(null)} />
+          )}
+        </AnimatePresence>
+
+        {/* ── SOS Emergency Card ── */}
+        <motion.div
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="rounded-2xl overflow-hidden border border-red-200 bg-gradient-to-r from-red-50 to-rose-50"
+        >
+          <div className="p-5 flex flex-col sm:flex-row sm:items-center gap-4">
+            <div className="flex items-center gap-3 flex-1">
+              <div className="w-12 h-12 rounded-xl bg-red-100 flex items-center justify-center text-2xl flex-shrink-0">
+                🆘
+              </div>
+              <div>
+                <p className="font-bold text-slate-800 text-sm">Emergency SOS Alert</p>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  One tap sends your <strong>name</strong>, <strong>GPS location</strong> & Google Maps link to <strong>+91 9330736637</strong>
+                </p>
+              </div>
+            </div>
+            <motion.button
+              whileHover={{ scale: 1.04 }}
+              whileTap={{ scale: 0.96 }}
+              onClick={handleSOSClick}
+              className="relative flex items-center justify-center gap-2 px-8 py-3 rounded-xl bg-red-600 hover:bg-red-700 text-white font-bold text-sm transition-all shadow-md shadow-red-300 flex-shrink-0"
+            >
+              <span className="absolute inset-0 rounded-xl border-2 border-red-400 animate-ping opacity-30 pointer-events-none" />
+              🚨 Send SOS Now
+            </motion.button>
+          </div>
+        </motion.div>
 
         {/* Stats */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
@@ -191,7 +417,9 @@ export default function Dashboard() {
               <div className="space-y-3 max-h-64 overflow-y-auto">
                 {notifications.slice(0, 8).map((n, i) => (
                   <div key={i} className={`p-3 rounded-xl border text-sm ${
-                    n.type === 'high_risk' || n.priority === 'high'
+                    n.type === 'sos' || n.category === 'sos'
+                      ? 'bg-red-50 border-red-100 text-red-700'
+                      : n.type === 'high_risk' || n.priority === 'high'
                       ? 'bg-red-50 border-red-100 text-red-700'
                       : n.type === 'medication'
                       ? 'bg-purple-50 border-purple-100 text-purple-700'
@@ -210,7 +438,7 @@ export default function Dashboard() {
         {/* Recent Reports */}
         <div className="medo-card p-6">
           <div className="flex items-center justify-between mb-5">
-            <h2 className="text-lg font-bold text-slate-800">Recent Reports & Analyses</h2>
+            <h2 className="text-lg font-bold text-slate-800">Recent Reports &amp; Analyses</h2>
             <button onClick={() => navigate('/health-history')} className="text-secondary text-sm font-semibold hover:underline">View All</button>
           </div>
           {recentReports.length === 0 ? (

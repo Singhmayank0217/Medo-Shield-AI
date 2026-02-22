@@ -139,6 +139,8 @@ export const healthAPI = {
     headers: { 'Content-Type': 'multipart/form-data' },
   }),
   getVideoAnalysis: (patientId) => api.get(`/health/video-analysis/${patientId}`),
+  // SOS Emergency Alert
+  sendSOSAlert: (data) => api.post('/health/sos-alert', data),
 };
 
 // =====================

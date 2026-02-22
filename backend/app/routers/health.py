@@ -2037,3 +2037,161 @@ async def get_video_analysis(
         )
 
 
+# =====================
+# SOS EMERGENCY ALERT
+# =====================
+
+class SOSAlertRequest(BaseModel):
+    """Request body for SOS emergency alert."""
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    location_name: Optional[str] = None
+    message: Optional[str] = None
+
+
+@router.post("/sos-alert")
+async def send_sos_alert(
+    body: SOSAlertRequest,
+    context: dict = Depends(require_roles(["patient"]))
+):
+    """
+    Send an SOS emergency alert SMS to the configured emergency number.
+    Includes patient name, location (Google Maps link), and timestamp.
+    """
+    db = Database.get_db()
+
+    # Get patient info
+    patient = await db["patients"].find_one({"user_id": context["user_id"]})
+    if not patient:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Patient not found")
+
+    patient_name = f"{patient.get('first_name', '')} {patient.get('last_name', '')}".strip() or "Patient"
+    patient_email = patient.get("email", "")
+    patient_id = str(patient.get("_id", context["user_id"]))
+
+    # Build location info
+    maps_link = ""
+    location_text = "Location unknown"
+    if body.latitude is not None and body.longitude is not None:
+        maps_link = f"https://maps.google.com/?q={body.latitude},{body.longitude}"
+        location_text = f"Lat: {body.latitude:.5f}, Lng: {body.longitude:.5f}"
+        if body.location_name:
+            location_text = body.location_name
+
+    now_utc = datetime.utcnow()
+    timestamp_str = now_utc.strftime("%d %b %Y, %H:%M UTC")
+
+    sms_body = (
+        f"SOS ALERT - MEDO SHIELD AI\n"
+        f"Patient: {patient_name}\n"
+        f"Time: {timestamp_str}\n"
+        f"Location: {location_text}\n"
+        + (f"Maps: {maps_link}\n" if maps_link else "")
+        + (f"Msg: {body.message}\n" if body.message else "")
+        + "Please respond immediately!"
+    ).strip()
+
+    emergency_number = "9330736637"
+    sms_sent = False
+    sms_error = ""
+
+    # Attempt SMS via Twilio (if credentials set) or TextBelt (free tier)
+    twilio_account_sid = os.environ.get("TWILIO_ACCOUNT_SID", "")
+    twilio_auth_token = os.environ.get("TWILIO_AUTH_TOKEN", "")
+    twilio_from_number = os.environ.get("TWILIO_FROM_NUMBER", "")
+
+    if twilio_account_sid and twilio_auth_token and twilio_from_number:
+        # Use Twilio
+        try:
+            import base64 as _base64
+            credentials = _base64.b64encode(
+                f"{twilio_account_sid}:{twilio_auth_token}".encode()
+            ).decode()
+            twilio_url = f"https://api.twilio.com/2010-04-01/Accounts/{twilio_account_sid}/Messages.json"
+            payload = {
+                "To": f"+91{emergency_number}",
+                "From": twilio_from_number,
+                "Body": sms_body,
+            }
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    twilio_url,
+                    data=payload,
+                    headers={"Authorization": f"Basic {credentials}"},
+                    timeout=15
+                ) as resp:
+                    resp_data = await resp.json()
+                    if resp.status in (200, 201):
+                        sms_sent = True
+                    else:
+                        sms_error = resp_data.get("message", "Twilio error")
+        except Exception as e:
+            sms_error = str(e)
+    else:
+        # Use TextBelt free-tier (1 free SMS/day, no registration needed)
+        try:
+            payload = {
+                "phone": f"+91{emergency_number}",
+                "message": sms_body,
+                "key": "textbelt",
+            }
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    "https://textbelt.com/text",
+                    data=payload,
+                    timeout=15
+                ) as resp:
+                    resp_data = await resp.json()
+                    if resp_data.get("success"):
+                        sms_sent = True
+                    else:
+                        sms_error = resp_data.get("error", "TextBelt quota exceeded")
+        except Exception as e:
+            sms_error = str(e)
+
+    # Log the SOS alert in DB regardless of SMS success
+    try:
+        await db["sos_alerts"].insert_one({
+            "patient_id": patient_id,
+            "patient_name": patient_name,
+            "patient_email": patient_email,
+            "emergency_number": emergency_number,
+            "latitude": body.latitude,
+            "longitude": body.longitude,
+            "location_name": body.location_name,
+            "maps_link": maps_link,
+            "custom_message": body.message,
+            "sms_body": sms_body,
+            "sms_sent": sms_sent,
+            "sms_error": sms_error if not sms_sent else "",
+            "created_at": datetime.utcnow()
+        })
+    except Exception:
+        pass
+
+    # In-app notification for the patient
+    try:
+        await _create_notification(
+            db,
+            patient_id,
+            "SOS Alert Sent",
+            f"Emergency alert dispatched to {emergency_number}. Stay safe!",
+            "sos"
+        )
+    except Exception:
+        pass
+
+    return {
+        "success": True,
+        "sms_sent": sms_sent,
+        "emergency_number": emergency_number,
+        "patient_name": patient_name,
+        "location": location_text,
+        "maps_link": maps_link,
+        "timestamp": timestamp_str,
+        "message": (
+            f"SOS alert sent to {emergency_number} successfully!"
+            if sms_sent
+            else f"Alert logged. SMS note: {sms_error or 'Unknown error'}. Please also call emergency services directly."
+        )
+    }
