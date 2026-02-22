@@ -172,9 +172,11 @@ export function insertSuggestion(currentInput, suggestionText) {
   return suggestionText;
 }
 
-export default {
+const chatSuggestions ={
   generateChatSuggestions,
   generateLocalSuggestions,
   getSuggestions,
   insertSuggestion,
-};
+}
+export default chatSuggestions;
+

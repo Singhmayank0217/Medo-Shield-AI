@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { motion } from 'framer-motion';
 import { useParams, useNavigate } from 'react-router-dom';
 import { healthAPI } from '../services/api';
 import { useAuthStore } from '../store/store';
@@ -12,7 +12,7 @@ export default function HealthChatbot() {
   const [messages, setMessages] = useState([]);
   const [inputValue, setInputValue] = useState('');
   const [loading, setLoading] = useState(false);
-  const [disclaimer, setDisclaimer] = useState(false);
+  // const [disclaimer, setDisclaimer] = useState(false);
   const [suggestedSpecialty, setSuggestedSpecialty] = useState(null);
 
   useEffect(() => {
@@ -63,7 +63,7 @@ export default function HealthChatbot() {
         disclaimer: data.disclaimer
       };
       setMessages(prev => [...prev, assistantMessage]);
-      setDisclaimer(data.disclaimer);
+      // setDisclaimer(data.disclaimer);
       if (data.suggested_specialty) setSuggestedSpecialty(data.suggested_specialty);
     } catch (err) {
       console.error('Error sending message:', err);
