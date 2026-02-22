@@ -1,7 +1,9 @@
 import axios from 'axios';
 
-// Dynamic API URL - use localhost:8000 for development
+console.log("REACT_APP_API_URL env:", process.env.REACT_APP_API_URL);
+// Dynamic API URL - use REACT_APP_API_URL from .env (CRA format)
 const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000';
+console.log("Using API Base URL:", API_BASE_URL);
 
 const api = axios.create({
   baseURL: `${API_BASE_URL}/api`,
